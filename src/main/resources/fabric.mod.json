@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "test-addon",
+  "version": "${version}",
+  "name": "TestAddon",
+  "description": "Some things in my live is never change",
+  "authors": [],
+  "contact": {},
+  "license": "All-Rights-Reserved",
+  "icon": "assets/testaddon/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "main": [
+      "padej.testaddon.Main"
+    ],
+    "soup:addon": [
+      "padej.testaddon.Main"
+    ]
+  },
+  "mixins": [
+    "testaddon.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "fabric-api": "*",
+    "minecraft": "${minecraft_version}"
+  }
+}
