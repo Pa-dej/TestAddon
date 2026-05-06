@@ -29,14 +29,21 @@ public class Main implements ModInitializer, SoupAddon {
 
     @Override
     public void onInitialize(SoupAPI api) {
-        // 1. Переводы — регистрируй первыми (до модулей)
+        // 1. Переводы — регистрируй первыми (до модулей),
+        //    чтобы названия категорий и модулей сразу локализовались.
+        // Файлы в /lang/test_addon/, а не в /lang/ — иначе на общем classpath (dev-окружение)
+        // они бы перекрывали /lang/en_us.ini основного мода и ломали все его переводы.
         api.getLocalizationManager().registerLanguage("en_us",
-                getClass().getResourceAsStream("/lang/en_us.ini"));
+                getClass().getResourceAsStream("/lang/test_addon/en_us.ini"));
         api.getLocalizationManager().registerLanguage("ru_ru",
-                getClass().getResourceAsStream("/lang/ru_ru.ini"));
+                getClass().getResourceAsStream("/lang/test_addon/ru_ru.ini"));
 
-        // 2. Модули
-        api.getModuleRepository().register(new MyModule());
+        // 2. Модули — все используют TestAddonCategory.MAIN,
+        //    поэтому появятся в отдельной вкладке «TestAddon» в меню.
+        api.getModuleRepository().register(
+                new MyModule(),
+                new HudInfoModule()
+        );
 
         // 3. HUD-элементы
         api.getDraggableRepository().register(new MyHudElement());
