@@ -27,7 +27,7 @@ dependencies {
 
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
 
-    modCompileOnly files("libs/SoupVisuals-3.1.2-addon-test.jar")
+    modCompileOnly files("libs/SoupVisuals-3.2.0-test-18.jar")
 }
 
 processResources {
