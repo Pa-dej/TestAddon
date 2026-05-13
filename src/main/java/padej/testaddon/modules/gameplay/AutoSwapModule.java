@@ -79,6 +79,18 @@ public class AutoSwapModule extends Module {
             "auto_swap.outline_thickness.name", "auto_swap.outline_thickness.desc"
     ).range(0, 6).setValue(2f);
 
+    /**
+     * Если true — пропускаем шаг {@code setScreen(InventoryScreen)} и кликаем
+     * по слотам напрямую через {@code playerScreenHandler}. Это работает,
+     * потому что сервер НЕ получает пакет об открытии своего же инвентаря
+     * (открытие чисто клиентское — playerScreenHandler всегда активен).
+     * Соответственно close-пакет тоже не нужен — без открытия его слать
+     * нет смысла, иначе анти-чит может среагировать на «лишний» close.
+     */
+    private final BooleanSetting skipInventoryOpen = new BooleanSetting(
+            "auto_swap.skip_inventory_open.name", "auto_swap.skip_inventory_open.desc"
+    ).setValue(false);
+
     private final TextSetting sphereName = new TextSetting(
             "auto_swap.sphere.name", "auto_swap.sphere.desc"
     ).setText(SPHERE_DEFAULT).setMax(48);
@@ -116,6 +128,7 @@ public class AutoSwapModule extends Module {
         all.add(maxSlots);
         all.add(hoverScale);
         all.add(outlineThickness);
+        all.add(skipInventoryOpen);
         all.add(sphereName);
         all.add(talismanName);
         all.add(swapSphereToTotem);
@@ -222,13 +235,22 @@ public class AutoSwapModule extends Module {
         if (target.slotId < 0 || target.slotId >= player.playerScreenHandler.slots.size()) return;
 
         isSwapping = true;
-        // Открываем инвентарь СЕЙЧАС в потоке клиента — критически важно для
-        // прохождения кликов слотов на сервер. Должно вызываться когда никакого
-        // другого экрана уже нет (см. confirmAndClose в радиале — setScreen(null)
-        // делается ДО вызова этого метода).
-        client.execute(() -> client.setScreen(new InventoryScreen(player)));
-
         int delay = Math.max(50, (int) swapDelay.getValue());
+
+        if (skipInventoryOpen.isValue()) {
+            // Skip-режим: НЕ открываем InventoryScreen. playerScreenHandler
+            // активен всегда, клики по слотам идут напрямую. Без визуального
+            // открытия можно стартовать swap сразу же без начальной задержки —
+            // нет UI-фазы, которую надо «дождаться».
+            client.execute(() -> performSwap(target.slotId, delay));
+            return;
+        }
+
+        // Обычный режим: открываем инвентарь СЕЙЧАС в потоке клиента, ждём
+        // delay (UI должен «прогреться»), затем гоняем кликами. Открытие
+        // вызывается когда никакого другого экрана уже нет (см. confirmAndClose
+        // в радиале — setScreen(null) делается ДО вызова этого метода).
+        client.execute(() -> client.setScreen(new InventoryScreen(player)));
 
         new Thread(() -> {
             try {
@@ -274,8 +296,14 @@ public class AutoSwapModule extends Module {
 
     private void finishSwap() {
         MinecraftClient client = mc;
-        if (client.player != null) client.player.closeHandledScreen();
-        client.setScreen(null);
+        // В skip-режиме мы не открывали InventoryScreen — закрывать тоже нечего.
+        // closeHandledScreen() слал бы CloseHandledScreenC2SPacket; для сервера
+        // это выглядело бы как «закрыл что-то что не открывал» — лишний паттерн
+        // для анти-чита. Просто сбрасываем флаг и выходим.
+        if (!skipInventoryOpen.isValue()) {
+            if (client.player != null) client.player.closeHandledScreen();
+            client.setScreen(null);
+        }
         isSwapping = false;
     }
 

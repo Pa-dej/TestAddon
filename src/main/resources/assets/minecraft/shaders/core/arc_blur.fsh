@@ -53,9 +53,13 @@ void main() {
         angleAlpha = smoothstep(angle, angle - smoothThresh, startAngle)
                    * smoothstep(angle, angle + smoothThresh, endAngle);
     } else {
+        // AA на обоих рёбрах ВНУТРЬ — симметрично с не-wrap веткой и с
+        // arc_outline.fsh, иначе фон сектора «вытекает» наружу на
+        // smoothThresh за wrappedEnd, что выглядит как утолщение
+        // одной из границ предпоследнего сектора при n=5,6,7.
         float wrappedEnd = endAngle - PI * 2.0;
         float pastStart    = smoothstep(angle, angle - smoothThresh, startAngle);
-        float beforeWrapEnd = 1.0 - smoothstep(wrappedEnd, wrappedEnd + smoothThresh, angle);
+        float beforeWrapEnd = 1.0 - smoothstep(wrappedEnd - smoothThresh, wrappedEnd, angle);
         angleAlpha = max(pastStart, beforeWrapEnd);
     }
 
