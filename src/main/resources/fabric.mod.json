@@ -4,7 +4,7 @@
   "version": "${version}",
   "name": "TestAddon",
   "description": "Some things in my live is never change",
-  "authors": [],
+  "authors": ["Winvi", "Padej_"],
   "contact": {},
   "license": "All-Rights-Reserved",
   "icon": "assets/testaddon/icon.png",
