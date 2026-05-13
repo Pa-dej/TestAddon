@@ -11,7 +11,7 @@ public class AutoNearModule extends Module {
 
     private final TextSetting command = new TextSetting(
             "auto_near.command.name", "auto_near.command.desc"
-    ).setText("/near");
+    ).setText("/near max");
 
     private final ValueSetting delaySeconds = new ValueSetting(
             "auto_near.delay.name", "auto_near.delay.desc"

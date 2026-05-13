@@ -1,64 +1,116 @@
 package padej.testaddon.modules.server;
 
-import net.minecraft.client.gui.screen.ingame.GenericContainerScreen;
+import net.minecraft.client.gui.screen.ingame.HandledScreen;
 import net.minecraft.screen.slot.SlotActionType;
 import padej.soup.api.event.EventHandler;
-import padej.soup.api.event.events.container.SetScreenEvent;
 import padej.soup.api.event.events.player.TickEvent;
 import padej.soup.api.feature.module.Module;
 import padej.soup.api.feature.module.setting.implement.ValueSetting;
 import padej.testaddon.SoupBetterCategory;
+import padej.testaddon.util.ServerUtil;
 
+import java.util.Locale;
+
+/**
+ * Перенос {@code winvi.moscow.soupbetter.modules.AuctionRelistModule}.
+ *
+ * <p><b>Назначение</b>: периодически (раз в {@code intervalSeconds}) запускает
+ * последовательность: {@code /ah} → клик по слоту "хранилище" (46) → клик
+ * по слоту "перевыставить" (52) → закрыть экран. Используется для FunTime
+ * аукциона, чтобы автоматически перевыставлять снятые лоты.</p>
+ *
+ * <p>Логика — машина состояний с детекцией активного экрана по заголовку
+ * ({@code "аукцион"} / {@code "хранилище"}), 1:1 с оригиналом.</p>
+ */
 public class AuctionRelistModule extends Module {
 
-    private final ValueSetting delayMs = new ValueSetting(
-            "auction_relist.delay.name", "auction_relist.delay.desc"
-    ).range(100, 2000).setValue(300.0f);
+    private enum State { IDLE, OPENING_AUCTION, CLICK_STORAGE, CLICK_RESELL, CLOSING }
 
-    private boolean waitingForScreen = false;
-    private long nextActionMs = 0;
-    private int step = 0;
+    private static final int STORAGE_BUTTON_SLOT = 46;
+    private static final int RESELL_BUTTON_SLOT  = 52;
+
+    private final ValueSetting intervalSeconds = new ValueSetting(
+            "auction_relist.interval.name", "auction_relist.interval.desc"
+    ).range(30, 3600).setValue(300.0f).setInteger(true);
+
+    private State state = State.IDLE;
+    private long lastCycleMs;
+    private long stateSinceMs;
 
     public AuctionRelistModule() {
         super("module.auction_relist.name", SoupBetterCategory.SERVER);
-        setup(delayMs);
+        setup(intervalSeconds);
     }
 
     @Override
-    public void activate() { step = 0; waitingForScreen = false; }
+    public void activate()   { state = State.IDLE; lastCycleMs = 0L; stateSinceMs = 0L; }
 
     @Override
-    public void deactivate() { step = 0; waitingForScreen = false; }
-
-    @EventHandler
-    public void onSetScreen(SetScreenEvent e) {
-        if (e.getScreen() instanceof GenericContainerScreen) {
-            waitingForScreen = false;
-            nextActionMs = System.currentTimeMillis() + (long) delayMs.getValue();
-        }
-    }
+    public void deactivate() { state = State.IDLE; lastCycleMs = 0L; stateSinceMs = 0L; }
 
     @EventHandler
     public void onTick(TickEvent e) {
-        if (mc.player == null || mc.interactionManager == null) return;
-        if (System.currentTimeMillis() < nextActionMs) return;
-        if (!(mc.currentScreen instanceof GenericContainerScreen screen)) return;
+        if (mc.player == null || mc.interactionManager == null || mc.getNetworkHandler() == null) return;
+        if (!ServerUtil.isFunTimeServer()) return;
 
-        // Простейший авто-рилист: клик по первому слоту → подтверждение
-        int syncId = screen.getScreenHandler().syncId;
-        switch (step) {
-            case 0 -> {
-                mc.interactionManager.clickSlot(syncId, 0, 0, SlotActionType.PICKUP, mc.player);
-                step = 1;
-                nextActionMs = System.currentTimeMillis() + (long) delayMs.getValue();
+        boolean auctionOpen = isHandledScreenWithTitle("auction", "аукцион");
+        boolean storageOpen = isHandledScreenWithTitle("storage", "хранилище");
+        long now = System.currentTimeMillis();
+
+        if (!auctionOpen && !storageOpen
+                && state != State.IDLE && state != State.OPENING_AUCTION) {
+            state = State.IDLE;
+        }
+
+        switch (state) {
+            case IDLE -> {
+                long delayMs = Math.max(30L, (long) intervalSeconds.getValue()) * 1000L;
+                if (now - lastCycleMs >= delayMs && mc.currentScreen == null) {
+                    mc.getNetworkHandler().sendChatCommand("ah");
+                    state = State.OPENING_AUCTION;
+                    stateSinceMs = now;
+                    lastCycleMs = now;
+                }
             }
-            case 1 -> {
-                // Подтверждение (слот кнопки "ОК", обычно последний)
-                int slots = screen.getScreenHandler().slots.size();
-                mc.interactionManager.clickSlot(syncId, slots - 1, 0, SlotActionType.PICKUP, mc.player);
-                step = 0;
-                setState(false); // выключаемся после одного цикла
+            case OPENING_AUCTION -> {
+                if (auctionOpen && now - stateSinceMs >= 500L) {
+                    state = State.CLICK_STORAGE;
+                    stateSinceMs = now;
+                }
+            }
+            case CLICK_STORAGE -> {
+                if (auctionOpen && now - stateSinceMs >= 300L) {
+                    mc.interactionManager.clickSlot(
+                            mc.player.playerScreenHandler.syncId,
+                            STORAGE_BUTTON_SLOT, 0, SlotActionType.PICKUP, mc.player);
+                    state = State.CLICK_RESELL;
+                    stateSinceMs = now;
+                }
+            }
+            case CLICK_RESELL -> {
+                if (storageOpen && now - stateSinceMs >= 500L) {
+                    mc.interactionManager.clickSlot(
+                            mc.player.playerScreenHandler.syncId,
+                            RESELL_BUTTON_SLOT, 0, SlotActionType.PICKUP, mc.player);
+                    state = State.CLOSING;
+                    stateSinceMs = now;
+                }
+            }
+            case CLOSING -> {
+                if (now - stateSinceMs >= 500L) {
+                    mc.player.closeHandledScreen();
+                    state = State.IDLE;
+                }
             }
         }
+    }
+
+    private boolean isHandledScreenWithTitle(String... needles) {
+        if (!(mc.currentScreen instanceof HandledScreen<?> screen)) return false;
+        String title = screen.getTitle().getString().toLowerCase(Locale.ROOT);
+        for (String needle : needles) {
+            if (title.contains(needle.toLowerCase(Locale.ROOT))) return true;
+        }
+        return false;
     }
 }

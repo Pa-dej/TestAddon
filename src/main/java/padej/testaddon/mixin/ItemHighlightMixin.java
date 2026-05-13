@@ -45,8 +45,9 @@ public class ItemHighlightMixin {
         }
 
         // --- AuctionHelperModule ---
+        // Подсветка по slot.id — модуль сам решает, входит ли этот слот в top-3 цен.
         AuctionHelperModule auction = AuctionHelperModule.getInstance();
-        if (auction != null && auction.shouldHighlight(stack)) {
+        if (auction != null && auction.shouldHighlight(slot)) {
             context.fill(absX, absY, absX + 16, absY + 16, auction.getHighlightColor());
         }
     }

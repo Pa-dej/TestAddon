@@ -1,27 +1,27 @@
 package padej.testaddon;
 
-import net.fabricmc.api.ModInitializer;
 import padej.soup.api.SoupAPI;
 import padej.soup.api.addon.SoupAddon;
 import padej.testaddon.modules.combat.*;
 import padej.testaddon.modules.gameplay.*;
 import padej.testaddon.modules.server.*;
 
-public class Main implements ModInitializer, SoupAddon {
+public class Main implements SoupAddon {
 
     @Override
-    public void onInitialize() {
-        // Вызывается Fabric — вся инициализация аддона в onInitialize(SoupAPI).
+    public String getId() {
+        return "soup-better";
     }
 
     @Override
-    public String getId() { return "soup-better"; }
+    public String getName() {
+        return "Soup Better";
+    }
 
     @Override
-    public String getName() { return "SoupBetter"; }
-
-    @Override
-    public String getVersion() { return "1.21.4+1.0.0"; }
+    public String getVersion() {
+        return "1.21.4+1.0.0";
+    }
 
     @Override
     public void onInitialize(SoupAPI api) {
@@ -44,7 +44,9 @@ public class Main implements ModInitializer, SoupAddon {
                 new CoordinateHelperModule(),
                 new LowArmorNotificationsModule(),
                 new PickaxeNotificationsModule(),
-                new PotionNotificationsModule()
+                new PotionNotificationsModule(),
+                new CapeModule(),
+                new GpsModule()
         );
 
         // 3. Модули — Combat

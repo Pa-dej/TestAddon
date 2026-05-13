@@ -7,7 +7,8 @@ import padej.soup.api.feature.module.setting.implement.BooleanSetting;
 import padej.soup.api.feature.module.setting.implement.SelectSetting;
 import padej.soup.api.feature.module.setting.implement.ValueSetting;
 import padej.testaddon.SoupBetterCategory;
-import org.lwjgl.glfw.GLFW;
+
+import java.util.concurrent.ThreadLocalRandom;
 
 public class MouseClickerModule extends Module {
 
@@ -19,6 +20,14 @@ public class MouseClickerModule extends Module {
             "mouse_clicker.cps.name", "mouse_clicker.cps.desc"
     ).range(1, 20).setValue(10.0f);
 
+    private final BooleanSetting jitter = new BooleanSetting(
+            "mouse_clicker.jitter.name", "mouse_clicker.jitter.desc"
+    ).setValue(true);
+
+    private final BooleanSetting requireHold = new BooleanSetting(
+            "mouse_clicker.require_hold.name", "mouse_clicker.require_hold.desc"
+    ).setValue(true);
+
     private final BooleanSetting onlyInGame = new BooleanSetting(
             "mouse_clicker.only_in_game.name", "mouse_clicker.only_in_game.desc"
     ).setValue(true);
@@ -27,7 +36,7 @@ public class MouseClickerModule extends Module {
 
     public MouseClickerModule() {
         super("module.mouse_clicker.name", SoupBetterCategory.GAMEPLAY);
-        setup(button, cps, onlyInGame);
+        setup(button, cps, jitter, requireHold, onlyInGame);
     }
 
     @EventHandler
@@ -35,27 +44,38 @@ public class MouseClickerModule extends Module {
         if (mc.player == null) return;
         if (onlyInGame.isValue() && mc.currentScreen != null) return;
 
+        boolean leftSel = button.isSelected("left");
+        boolean rightSel = button.isSelected("right");
+
+        // Если включена опция "только при удержании кнопки" — проверяем
+        // что соответствующая клавиша игры реально нажата пользователем.
+        if (requireHold.isValue()) {
+            if (leftSel  && !mc.options.attackKey.isPressed()) return;
+            if (rightSel && !mc.options.useKey   .isPressed()) return;
+        }
+
         long now = System.currentTimeMillis();
-        long interval = (long)(1000.0f / cps.getValue());
+        float effectiveCps = cps.getValue();
+        if (jitter.isValue()) {
+            // ±15% случайного дрожания, чтобы клики не были метрономно ровными
+            float deviation = effectiveCps * 0.15f;
+            effectiveCps += ThreadLocalRandom.current().nextFloat(-deviation, deviation);
+            effectiveCps = Math.max(1f, effectiveCps);
+        }
+        long interval = (long) (1000.0f / effectiveCps);
         if (now - lastClickMs < interval) return;
         lastClickMs = now;
 
-        long win = mc.getWindow().getHandle();
-        int btn = button.isSelected("right") ? GLFW.GLFW_MOUSE_BUTTON_RIGHT : GLFW.GLFW_MOUSE_BUTTON_LEFT;
-        GLFW.glfwSetMouseButtonCallback(win, null);
-        // Отправляем синтетический клик через опции мыши
-        if (btn == GLFW.GLFW_MOUSE_BUTTON_LEFT) {
-            mc.options.attackKey.setPressed(true);
+        if (leftSel) {
+            mc.doAttack();
         } else {
-            mc.options.useKey.setPressed(true);
+            mc.doItemUse();
         }
     }
 
     @Override
     public void deactivate() {
-        if (mc.options != null) {
-            mc.options.attackKey.setPressed(false);
-            mc.options.useKey.setPressed(false);
-        }
+        // Никаких глобальных побочных эффектов — модуль ничего не "залипает".
+        lastClickMs = 0;
     }
 }

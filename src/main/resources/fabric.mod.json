@@ -10,13 +10,11 @@
   "icon": "assets/testaddon/icon.png",
   "environment": "client",
   "entrypoints": {
-    "main": [
-      "padej.testaddon.Main"
-    ],
     "soup:addon": [
       "padej.testaddon.Main"
     ]
   },
+  "accessWidener": "testaddon.accesswidener",
   "mixins": [
     "testaddon.mixins.json"
   ],
