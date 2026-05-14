@@ -282,6 +282,28 @@ public class AutoSwapModule extends Module {
         saveStacksToFile();
     }
 
+    /** Меняет местами привязки двух слотов: имена + кэшированные ItemStack'и.
+     *  Используется для drag-and-drop перетаскивания в радиале. */
+    public void swapSavedSlots(int a, int b) {
+        if (a == b) return;
+        if (a < 0 || a >= MAX_SAVED_SLOTS) return;
+        if (b < 0 || b >= MAX_SAVED_SLOTS) return;
+
+        // Имена меняем через TextSetting — конфиг тоже обновится.
+        String nameA = savedSlots[a].getText();
+        String nameB = savedSlots[b].getText();
+        savedSlots[a].setText(nameB == null ? "" : nameB);
+        savedSlots[b].setText(nameA == null ? "" : nameA);
+
+        // Стеки — через кэш + NBT-файл.
+        ensureStacksLoaded();
+        ItemStack stackA = savedStacksCache.get(a);
+        ItemStack stackB = savedStacksCache.get(b);
+        if (stackB != null) savedStacksCache.put(a, stackB); else savedStacksCache.remove(a);
+        if (stackA != null) savedStacksCache.put(b, stackA); else savedStacksCache.remove(b);
+        saveStacksToFile();
+    }
+
     // ─── ItemStack persistence (SoupAPI/files/soup_better/autoswap.nbt) ───────
 
     /** Файл с NBT-сериализованными ItemStack'ами radial-слотов. */

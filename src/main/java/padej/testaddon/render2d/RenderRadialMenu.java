@@ -274,10 +274,14 @@ public class RenderRadialMenu extends Render2D {
 
                 ItemStack stack = slot.itemStack();
                 boolean available = slot.isAvailable();
+                boolean dragging = slot.isDragging();
                 ctx.getMatrices().push();
                 ctx.getMatrices().translate(ix, iy, 0);
                 ctx.getMatrices().scale(1.5f, 1.5f, 1f);
-                if (stack != null && !stack.isEmpty()) {
+                if (dragging) {
+                    // Иконку рисует Screen поверх курсора — здесь пропускаем,
+                    // чтобы не было дубликата.
+                } else if (stack != null && !stack.isEmpty()) {
                     if (!available) {
                         // Предмет привязан, но физически не в инвентаре —
                         // рисуем тот же стек (тот же item + NBT), но
@@ -437,5 +441,8 @@ public class RenderRadialMenu extends Render2D {
          *  {@code false} → стек взят из NBT-кэша как fallback, рисуется
          *  приглушённо (греет «недоступно»). */
         boolean isAvailable();
+        /** {@code true} если игрок перетаскивает иконку этого слота — рендер
+         *  пропустит её отрисовку в секторе (экран сам нарисует поверх курсора). */
+        default boolean isDragging() { return false; }
     }
 }

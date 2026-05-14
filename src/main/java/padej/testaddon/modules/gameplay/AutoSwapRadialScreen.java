@@ -43,6 +43,13 @@ public class AutoSwapRadialScreen extends Screen {
     private final RenderRadialMenu renderer;
 
     private int hovered = -1;
+    /** Индекс слота, из которого игрок перетаскивает предмет (LMB hold).
+     *  -1 = drag не активен. */
+    private int draggingFromIdx = -1;
+    /** Последняя зафиксированная позиция мыши — используется для отрисовки
+     *  drag-иконки в render(). DrawContext в mouseClicked/mouseReleased
+     *  недоступен, поэтому позицию запоминаем для render-фазы. */
+    private int lastMouseX, lastMouseY;
 
     public AutoSwapRadialScreen(AutoSwapModule module, int holdKey) {
         super(Text.literal("AutoSwap"));
@@ -132,6 +139,9 @@ public class AutoSwapRadialScreen extends Screen {
             return;
         }
 
+        lastMouseX = mouseX;
+        lastMouseY = mouseY;
+
         // Во время close-анимации hover заморожен — выбор уже зафиксирован.
         hovered = renderer.isClosing()
                 ? -1
@@ -149,6 +159,21 @@ public class AutoSwapRadialScreen extends Screen {
                 this.textRenderer,
                 getHintText()
         );
+
+        // Drag-overlay: иконка перетаскиваемого слота едет за курсором.
+        // Renderer для этого слота пропускает отрисовку в секторе (см.
+        // SlotView.isDragging), здесь мы рисуем её ровно под курсором.
+        if (draggingFromIdx >= 0 && draggingFromIdx < slots.size()) {
+            SwapSlotView src = slots.get(draggingFromIdx);
+            ItemStack ds = src.itemStack;
+            if (ds != null && !ds.isEmpty()) {
+                ctx.getMatrices().push();
+                ctx.getMatrices().translate(lastMouseX, lastMouseY, 0);
+                ctx.getMatrices().scale(1.5f, 1.5f, 1f);
+                ctx.drawItem(ds, -8, -8);
+                ctx.getMatrices().pop();
+            }
+        }
     }
 
     @Override
@@ -173,23 +198,43 @@ public class AutoSwapRadialScreen extends Screen {
                     }
                 }
             } else {
-                // Заполненный слот: запускаем swap НЕМЕДЛЕННО, close-анимация
-                // играется параллельно как чисто визуальный эффект. В non-skip
-                // режиме swap откроет InventoryScreen и заменит наш Screen
-                // мгновенно — анимация не успеет; в skip-режиме экран останется
-                // и close-анимация доиграет до конца.
-                module.activateSavedSlotSwap(hovered);
-                renderer.startClose();
+                // Заполненный слот: начинаем DRAG. Активация swap'а делается
+                // отпусканием menu-key (confirmAndClose), а не ЛКМ.
+                draggingFromIdx = hovered;
+                slot.dragging = true;
             }
             return true;
         }
         if (button == 1) {
+            // ПКМ — удаление предмета из слота. Если параллельно идёт drag
+            // и удаляется источник — отменяем drag.
             slot.itemStack = null;
             slot.savedItemName = null;
+            slot.dragging = false;
+            slot.available = false;
             module.clearSavedSlot(hovered);
+            if (draggingFromIdx == hovered) draggingFromIdx = -1;
             return true;
         }
         return false;
+    }
+
+    @Override
+    public boolean mouseReleased(double mouseX, double mouseY, int button) {
+        if (button == 0 && draggingFromIdx >= 0) {
+            int from = draggingFromIdx;
+            draggingFromIdx = -1;
+            if (from < slots.size()) slots.get(from).dragging = false;
+
+            // Drop: если курсор на другом слоте — меняем содержимое
+            // местами (swap). Если на том же или вне зоны — drag отменяется.
+            if (hovered >= 0 && hovered != from) {
+                module.swapSavedSlots(from, hovered);
+                rebuildSlots();
+            }
+            return true;
+        }
+        return super.mouseReleased(mouseX, mouseY, button);
     }
 
     @Override
@@ -300,6 +345,9 @@ public class AutoSwapRadialScreen extends Screen {
         /** True если itemStack — живой стек из инвентаря, false если fallback
          *  из NBT-кэша. Управляет grayscale-рендером в {@link RenderRadialMenu}. */
         boolean available;
+        /** True если игрок прямо сейчас тащит иконку этого слота — рендер
+         *  пропускает её, Screen рисует поверх курсора. */
+        boolean dragging;
 
         SwapSlotView(ItemStack itemStack, String savedItemName, int index, boolean available) {
             this.itemStack = itemStack;
@@ -311,5 +359,6 @@ public class AutoSwapRadialScreen extends Screen {
         @Override public ItemStack itemStack()     { return itemStack; }
         @Override public String    savedItemName() { return savedItemName; }
         @Override public boolean   isAvailable()   { return available; }
+        @Override public boolean   isDragging()    { return dragging; }
     }
 }
