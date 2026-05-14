@@ -43,9 +43,6 @@ public class AutoSwapRadialScreen extends Screen {
     private final RenderRadialMenu renderer;
 
     private int hovered = -1;
-    /** Индекс сектора, который надо активировать после завершения close-анимации
-     *  (−1 = просто закрыть без действия). */
-    private int pendingActivateIdx = -1;
 
     public AutoSwapRadialScreen(AutoSwapModule module, int holdKey) {
         super(Text.literal("AutoSwap"));
@@ -121,12 +118,10 @@ public class AutoSwapRadialScreen extends Screen {
     public void render(DrawContext ctx, int mouseX, int mouseY, float delta) {
         // Не вызываем super.render — не нужен ванильный фон Screen.
 
-        // close-анимация отыграла → выполняем отложенное действие и выходим.
+        // close-анимация отыграла → просто закрываем экран. Свап (если был)
+        // уже запущен в confirmAndClose/mouseClicked — анимация чисто визуальная.
         if (renderer.closeFinished()) {
-            int idx = pendingActivateIdx;
-            pendingActivateIdx = -1;
             mc.setScreen(null);
-            if (idx >= 0) module.activateSavedSlotSwap(idx);
             return;
         }
 
@@ -168,8 +163,12 @@ public class AutoSwapRadialScreen extends Screen {
                     }
                 }
             } else {
-                // Заполненный слот: запускаем close-анимацию с активацией.
-                pendingActivateIdx = hovered;
+                // Заполненный слот: запускаем swap НЕМЕДЛЕННО, close-анимация
+                // играется параллельно как чисто визуальный эффект. В non-skip
+                // режиме swap откроет InventoryScreen и заменит наш Screen
+                // мгновенно — анимация не успеет; в skip-режиме экран останется
+                // и close-анимация доиграет до конца.
+                module.activateSavedSlotSwap(hovered);
                 renderer.startClose();
             }
             return true;
@@ -192,7 +191,7 @@ public class AutoSwapRadialScreen extends Screen {
         mc.options.forwardKey.setPressed(mc.options.forwardKey.isPressed());
 
         if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
-            pendingActivateIdx = -1;
+            // ESC — закрытие без активации, просто запускаем визуальную close.
             renderer.startClose();
             return true;
         }
@@ -227,15 +226,15 @@ public class AutoSwapRadialScreen extends Screen {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    /** Запускает закрытие. Если под курсором заполненный слот — отложенный
-     *  swap, иначе просто закрываем. */
+    /** Запускает закрытие. Если под курсором заполненный слот — стартуем swap
+     *  немедленно (не ждём окончания close-анимации), сама анимация играется
+     *  чисто визуально параллельно. */
     private void confirmAndClose() {
         int sel = hovered;
-        pendingActivateIdx = -1;
         if (sel >= 0 && sel < slots.size()) {
             SwapSlotView slot = slots.get(sel);
             if (slot.savedItemName != null && !slot.savedItemName.isBlank()) {
-                pendingActivateIdx = sel;
+                module.activateSavedSlotSwap(sel);
             }
         }
         renderer.startClose();
