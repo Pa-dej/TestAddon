@@ -61,8 +61,15 @@ public class AutoSwapRadialScreen extends Screen {
         MinecraftClient client = MinecraftClient.getInstance();
         for (int i = 0; i < maxSlots; i++) {
             String name = module.getSavedItem(i);
-            ItemStack icon = findItemByName(client, name);
-            slots.add(new SwapSlotView(icon, name, i));
+            ItemStack live = findItemByName(client, name);
+            // Если предмета сейчас нет в инвентаре — берём из NBT-кэша
+            // SoupAPI/files/soup_better/autoswap.nbt, чтобы иконка всё равно
+            // отображалась (визуальный bind остался даже после смерти/складирования).
+            // Флаг `available` различает живой стек и fallback — рендер
+            // рисует fallback в grayscale.
+            boolean available = live != null;
+            ItemStack icon = available ? live : module.getSavedStack(i);
+            slots.add(new SwapSlotView(icon, name, i, available));
         }
     }
 
@@ -159,7 +166,10 @@ public class AutoSwapRadialScreen extends Screen {
                         String name = held.getName().getString();
                         slot.itemStack = held.copy();
                         slot.savedItemName = name;
-                        module.setSavedSlot(hovered, name);
+                        slot.available = true;   // только что взят из руки
+                        // Стек сохраняется в NBT-файл — иконка переживёт
+                        // отсутствие предмета в инвентаре (склад / смерть).
+                        module.setSavedSlot(hovered, name, held);
                     }
                 }
             } else {
@@ -219,7 +229,9 @@ public class AutoSwapRadialScreen extends Screen {
         }
         for (SwapSlotView slot : slots) {
             if (slot.savedItemName != null) {
-                slot.itemStack = findItemByName(mc, slot.savedItemName);
+                ItemStack live = findItemByName(mc, slot.savedItemName);
+                slot.available = live != null;
+                slot.itemStack = slot.available ? live : module.getSavedStack(slot.index);
             }
         }
     }
@@ -285,14 +297,19 @@ public class AutoSwapRadialScreen extends Screen {
         ItemStack itemStack;
         String savedItemName;
         final int index;
+        /** True если itemStack — живой стек из инвентаря, false если fallback
+         *  из NBT-кэша. Управляет grayscale-рендером в {@link RenderRadialMenu}. */
+        boolean available;
 
-        SwapSlotView(ItemStack itemStack, String savedItemName, int index) {
+        SwapSlotView(ItemStack itemStack, String savedItemName, int index, boolean available) {
             this.itemStack = itemStack;
             this.savedItemName = savedItemName;
             this.index = index;
+            this.available = available;
         }
 
         @Override public ItemStack itemStack()     { return itemStack; }
         @Override public String    savedItemName() { return savedItemName; }
+        @Override public boolean   isAvailable()   { return available; }
     }
 }

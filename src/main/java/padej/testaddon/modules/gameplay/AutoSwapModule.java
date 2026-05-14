@@ -6,6 +6,12 @@ import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
+import net.minecraft.nbt.NbtCompound;
+import net.minecraft.nbt.NbtElement;
+import net.minecraft.nbt.NbtIo;
+import net.minecraft.nbt.NbtOps;
+import net.minecraft.registry.RegistryOps;
+import net.minecraft.registry.RegistryWrapper;
 import net.minecraft.screen.slot.SlotActionType;
 import org.lwjgl.glfw.GLFW;
 import padej.soup.api.event.EventHandler;
@@ -19,9 +25,14 @@ import padej.soup.api.feature.module.setting.implement.ValueSetting;
 import padej.testaddon.SoupBetterCategory;
 import padej.testaddon.util.ServerUtil;
 
+import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
 
 /**
  * Перенос {@code winvi.moscow.soupbetter.modules.AutoSwapModule}.
@@ -112,6 +123,14 @@ public class AutoSwapModule extends Module {
 
     /** Сохранённые предметы радиала (имена). Конфиг хранит как TextSetting'и. */
     private final TextSetting[] savedSlots = new TextSetting[MAX_SAVED_SLOTS];
+
+    /** Кэш ItemStack'ов в памяти: idx → стек. Нужен, чтобы иконка слота
+     *  отображалась даже когда предмета сейчас нет в инвентаре. Источник
+     *  истины — файл {@code SoupAPI/files/soup_better/autoswap.nbt}. */
+    private final Map<Integer, ItemStack> savedStacksCache = new HashMap<>();
+    /** {@link #savedStacksCache} лениво подгружается на первом обращении,
+     *  когда mc.world уже доступен (registry-lookup'ы нужны для ItemStack-NBT). */
+    private boolean cacheLoaded = false;
 
     private boolean isSwapping;
 
@@ -229,13 +248,98 @@ public class AutoSwapModule extends Module {
         return (s == null || s.isBlank()) ? null : s;
     }
 
-    public void setSavedSlot(int idx, String name) {
+    /** Возвращает сохранённый ItemStack для слота {@code idx} или {@code null}.
+     *  Используется радиалом как fallback-иконка, когда предмета нет в текущем
+     *  инвентаре игрока (но он раньше был привязан). */
+    public ItemStack getSavedStack(int idx) {
+        if (idx < 0 || idx >= MAX_SAVED_SLOTS) return null;
+        ensureStacksLoaded();
+        ItemStack s = savedStacksCache.get(idx);
+        return (s == null || s.isEmpty()) ? null : s;
+    }
+
+    /** Сохраняет привязку: имя предмета + сам ItemStack (копию) в файл. */
+    public void setSavedSlot(int idx, String name, ItemStack stack) {
         if (idx < 0 || idx >= MAX_SAVED_SLOTS) return;
         savedSlots[idx].setText(name == null ? "" : name);
+        ensureStacksLoaded();
+        if (stack != null && !stack.isEmpty()) {
+            savedStacksCache.put(idx, stack.copy());
+        } else {
+            savedStacksCache.remove(idx);
+        }
+        saveStacksToFile();
     }
 
     public void clearSavedSlot(int idx) {
-        setSavedSlot(idx, "");
+        if (idx < 0 || idx >= MAX_SAVED_SLOTS) return;
+        savedSlots[idx].setText("");
+        ensureStacksLoaded();
+        savedStacksCache.remove(idx);
+        saveStacksToFile();
+    }
+
+    // ─── ItemStack persistence (SoupAPI/files/soup_better/autoswap.nbt) ───────
+
+    /** Файл с NBT-сериализованными ItemStack'ами radial-слотов. */
+    private File getStorageFile() {
+        return new File(mc.runDirectory, "SoupAPI/files/soup_better/autoswap.nbt");
+    }
+
+    /** Ленивая загрузка кэша при первом обращении. mc.world должен быть
+     *  доступен, иначе нет registry-lookup'а для ItemStack-кодека. */
+    private void ensureStacksLoaded() {
+        if (cacheLoaded) return;
+        if (mc.world == null) return;
+        cacheLoaded = true;
+
+        File file = getStorageFile();
+        if (!file.exists()) return;
+        try {
+            NbtCompound root = NbtIo.read(file.toPath());
+            if (root == null) return;
+            RegistryWrapper.WrapperLookup registries = mc.world.getRegistryManager();
+            RegistryOps<NbtElement> ops = registries.getOps(NbtOps.INSTANCE);
+            for (int i = 0; i < MAX_SAVED_SLOTS; i++) {
+                String key = String.valueOf(i);
+                if (!root.contains(key)) continue;
+                NbtElement el = root.get(key);
+                if (el == null) continue;
+                Optional<ItemStack> parsed = ItemStack.OPTIONAL_CODEC
+                        .parse(ops, el)
+                        .result();
+                if (parsed.isPresent() && !parsed.get().isEmpty()) {
+                    savedStacksCache.put(i, parsed.get());
+                }
+            }
+        } catch (IOException | RuntimeException e) {
+            // Файл повреждён или формат изменился между версиями —
+            // игнорируем, пересоздадим при следующем bind'е.
+        }
+    }
+
+    /** Сериализуем текущий {@link #savedStacksCache} в NBT-файл. Регистр
+     *  должен быть доступен (mc.world != null), иначе тихо игнорим. */
+    private void saveStacksToFile() {
+        if (mc.world == null) return;
+        File file = getStorageFile();
+        File parent = file.getParentFile();
+        if (parent != null && !parent.exists() && !parent.mkdirs()) return;
+
+        NbtCompound root = new NbtCompound();
+        RegistryWrapper.WrapperLookup registries = mc.world.getRegistryManager();
+        RegistryOps<NbtElement> ops = registries.getOps(NbtOps.INSTANCE);
+        for (Map.Entry<Integer, ItemStack> e : savedStacksCache.entrySet()) {
+            ItemStack s = e.getValue();
+            if (s == null || s.isEmpty()) continue;
+            ItemStack.OPTIONAL_CODEC
+                    .encodeStart(ops, s)
+                    .result()
+                    .ifPresent(nbt -> root.put(String.valueOf(e.getKey()), nbt));
+        }
+        try {
+            NbtIo.write(root, file.toPath());
+        } catch (IOException ignored) {}
     }
 
     // ─── Swap mechanics (1:1 с оригиналом) ────────────────────────────────────

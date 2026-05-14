@@ -273,11 +273,23 @@ public class RenderRadialMenu extends Render2D {
                 float iy = centerY + (float) Math.sin(mid) * midR;
 
                 ItemStack stack = slot.itemStack();
+                boolean available = slot.isAvailable();
                 ctx.getMatrices().push();
                 ctx.getMatrices().translate(ix, iy, 0);
                 ctx.getMatrices().scale(1.5f, 1.5f, 1f);
                 if (stack != null && !stack.isEmpty()) {
-                    ctx.drawItem(stack, -8, -8);
+                    if (!available) {
+                        // Предмет привязан, но физически не в инвентаре —
+                        // рисуем тот же стек (тот же item + NBT), но
+                        // приглушённо: shaderColor (0.35, 0.35, 0.35, 0.6)
+                        // ≈ серая полупрозрачная заливка, читается как
+                        // «недоступно» без отдельного шейдера.
+                        RenderSystem.setShaderColor(0.35f, 0.35f, 0.35f, 0.6f);
+                        ctx.drawItem(stack, -8, -8);
+                        RenderSystem.setShaderColor(1f, 1f, 1f, 1f);
+                    } else {
+                        ctx.drawItem(stack, -8, -8);
+                    }
                 } else {
                     String label = String.valueOf(i + 1);
                     int w = textRenderer.getWidth(label);
@@ -421,5 +433,9 @@ public class RenderRadialMenu extends Render2D {
     public interface SlotView {
         ItemStack itemStack();
         String savedItemName();
+        /** {@code true} если предмет физически есть в инвентаре игрока сейчас.
+         *  {@code false} → стек взят из NBT-кэша как fallback, рисуется
+         *  приглушённо (греет «недоступно»). */
+        boolean isAvailable();
     }
 }
