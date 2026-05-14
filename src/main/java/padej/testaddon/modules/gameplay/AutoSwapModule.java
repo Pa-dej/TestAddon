@@ -2,6 +2,8 @@ package padej.testaddon.modules.gameplay;
 
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.ingame.InventoryScreen;
+import net.minecraft.client.option.KeyBinding;
+import net.minecraft.client.util.InputUtil;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.screen.slot.SlotActionType;
@@ -112,6 +114,16 @@ public class AutoSwapModule extends Module {
     private final TextSetting[] savedSlots = new TextSetting[MAX_SAVED_SLOTS];
 
     private boolean isSwapping;
+
+    /** Снэпшот yaw/pitch на момент начала swap'а — чтобы держать камеру
+     *  неподвижной всё время кликов и не слать PlayerMove с поворотами. */
+    private float swapStartYaw;
+    private float swapStartPitch;
+    /** Guard-поток, который каждые ~5мс пере-замораживает движение и
+     *  возвращает yaw/pitch к снэпшоту. Без него игрок мог бы обойти заморозку
+     *  повторным нажатием клавиш или поворотом мышкой. */
+    private Thread freezerThread;
+    private volatile boolean freezerRunning = false;
     private int directRotIndex;
 
     /** Нужно чтобы открыть радиал только один раз на одно нажатие menu-key (rising edge). */
@@ -239,10 +251,27 @@ public class AutoSwapModule extends Module {
 
         if (skipInventoryOpen.isValue()) {
             // Skip-режим: НЕ открываем InventoryScreen. playerScreenHandler
-            // активен всегда, клики по слотам идут напрямую. Без визуального
-            // открытия можно стартовать swap сразу же без начальной задержки —
-            // нет UI-фазы, которую надо «дождаться».
-            client.execute(() -> performSwap(target.slotId, delay));
+            // активен всегда, клики по слотам идут напрямую.
+            //
+            // Чтобы анти-чит не увидел паттерн «click_slot + walk/look»
+            // (в ванилле движение/поворот невозможны при открытом инвентаре):
+            // 1) делаем снэпшот yaw/pitch — будем держать камеру на нём
+            //    весь swap, чтобы вообще не слались rotation-пакеты;
+            // 2) запускаем guard-поток, который каждые ~5 мс ре-замораживает
+            //    movement-бинды (иначе игрок мог бы повторно нажать W во
+            //    время паузы между кликами и анти-чит увидел бы walk);
+            // 3) даём такую же первую задержку как в non-skip режиме —
+            //    мгновенный click_slot без preceding-паузы тоже выглядит
+            //    подозрительно для эвристик.
+            startFreezerThread();
+            new Thread(() -> {
+                try {
+                    Thread.sleep(delay);
+                    client.execute(() -> performSwap(target.slotId, delay));
+                } catch (InterruptedException ignored) {
+                    client.execute(this::finishSwap);
+                }
+            }, "SoupBetter-AutoSwapStart").start();
             return;
         }
 
@@ -296,15 +325,120 @@ public class AutoSwapModule extends Module {
 
     private void finishSwap() {
         MinecraftClient client = mc;
-        // В skip-режиме мы не открывали InventoryScreen — закрывать тоже нечего.
-        // closeHandledScreen() слал бы CloseHandledScreenC2SPacket; для сервера
-        // это выглядело бы как «закрыл что-то что не открывал» — лишний паттерн
-        // для анти-чита. Просто сбрасываем флаг и выходим.
-        if (!skipInventoryOpen.isValue()) {
-            if (client.player != null) client.player.closeHandledScreen();
+        // closeHandledScreen() шлёт CloseHandledScreenC2SPacket — это норма:
+        // сервер видит только close-пакеты (open-пакетов для своего инвентаря
+        // не существует в принципе), поэтому close выглядит как обычное
+        // закрытие любого контейнера и не вызывает подозрений у анти-чита.
+        if (client.player != null) client.player.closeHandledScreen();
+        if (skipInventoryOpen.isValue()) {
+            // В skip-режиме мы не открывали InventoryScreen — соответственно
+            // и setScreen(null) делать не нужно (могли бы случайно закрыть
+            // какой-то другой экран, открытый параллельно). Останавливаем
+            // guard и возвращаем движение по фактическому состоянию GLFW.
+            stopFreezerThread();
+            unfreezeMovement();
+        } else {
             client.setScreen(null);
         }
         isSwapping = false;
+    }
+
+    /** Возвращает массив movement-биндов в фиксированном порядке. */
+    private KeyBinding[] movementBindings() {
+        var o = mc.options;
+        return new KeyBinding[]{
+                o.forwardKey, o.backKey, o.leftKey, o.rightKey,
+                o.jumpKey, o.sneakKey, o.sprintKey
+        };
+    }
+
+    /**
+     * Замораживает движение игрока — ставит {@code pressed=false} всем
+     * movement-биндам. Нужно в skip-режиме, чтобы анти-чит не флагал
+     * паттерн «click_slot + walk» (в ванилле движение невозможно с открытым
+     * InventoryScreen, а скрытое открытие сервер не видит). После
+     * {@link #unfreezeMovement} физическое состояние клавиш восстанавливается
+     * через GLFW-poll.
+     */
+    private void freezeMovement() {
+        for (KeyBinding kb : movementBindings()) {
+            kb.setPressed(false);
+        }
+    }
+
+    /**
+     * Снэпшотит yaw/pitch и стартует guard-поток, который каждые ~5 мс
+     * пере-замораживает movement-бинды и возвращает камеру в снэпшот.
+     * Это нужно потому что:
+     * <ul>
+     *   <li>В skip-режиме нет открытого Screen → ванилла продолжает читать
+     *   GLFW-нажатия в KeyBinding. Однократный {@code freezeMovement()} не
+     *   удержит — если игрок отпустит и снова нажмёт W, ванилла перепрожмёт
+     *   forwardKey, и анти-чит увидит walk-пакет посреди клик-серии.</li>
+     *   <li>Mouse-движение в отсутствие открытого Screen крутит камеру и
+     *   шлёт PlayerMove-пакеты с дельтой по yaw/pitch — это тоже триггер
+     *   для анти-чита.</li>
+     * </ul>
+     * Guard приводит client.player.yaw/pitch к снэпшоту КАЖДЫЙ цикл, и
+     * KeyBinding'и к pressed=false → ни movement, ни rotation не сваливаются
+     * в outbound-пакеты во время swap'а.
+     */
+    private void startFreezerThread() {
+        var player = mc.player;
+        if (player == null) return;
+        swapStartYaw   = player.getYaw();
+        swapStartPitch = player.getPitch();
+        freezerRunning = true;
+        freezerThread = new Thread(() -> {
+            while (freezerRunning) {
+                mc.execute(() -> {
+                    if (!freezerRunning) return;
+                    freezeMovement();
+                    var p = mc.player;
+                    if (p != null) {
+                        // Возвращаем поворот в снэпшот. prev* сбрасываем тоже,
+                        // чтобы интерполяция рендера не показывала рывки камеры.
+                        // sendMovementPackets ванила сравнивает getYaw() с
+                        // приватным lastYaw, который равен снэпшоту с последнего
+                        // успешного send'а — раз мы держим getYaw == lastYaw,
+                        // rotation-пакеты не уходят на сервер.
+                        p.setYaw(swapStartYaw);
+                        p.setPitch(swapStartPitch);
+                        p.prevYaw = swapStartYaw;
+                        p.prevPitch = swapStartPitch;
+                    }
+                });
+                try { Thread.sleep(5); }
+                catch (InterruptedException ignored) { break; }
+            }
+        }, "SoupBetter-AutoSwapFreezer");
+        freezerThread.setDaemon(true);
+        freezerThread.start();
+    }
+
+    private void stopFreezerThread() {
+        freezerRunning = false;
+        if (freezerThread != null) {
+            freezerThread.interrupt();
+            freezerThread = null;
+        }
+    }
+
+    /**
+     * Восстанавливает движение после {@link #freezeMovement}: re-poll GLFW
+     * по фактически привязанным клавишам. Если игрок всё ещё держит W —
+     * {@code forwardKey} снова станет pressed; если отпустил во время swap'а —
+     * останется false.
+     */
+    private void unfreezeMovement() {
+        long window = mc.getWindow().getHandle();
+        for (KeyBinding kb : movementBindings()) {
+            InputUtil.Key boundKey = InputUtil.fromTranslationKey(kb.getBoundKeyTranslationKey());
+            if (boundKey.getCategory() != InputUtil.Type.KEYSYM) continue;
+            int code = boundKey.getCode();
+            if (code == GLFW.GLFW_KEY_UNKNOWN) continue;
+            kb.setPressed(GLFW.glfwGetKey(window, code) == GLFW.GLFW_PRESS);
+        }
     }
 
     // ─── Target selection (правила Direct-режима) ─────────────────────────────
