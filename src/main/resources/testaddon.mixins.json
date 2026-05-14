@@ -9,7 +9,8 @@
     "GameRendererMixin",
     "FreelookCameraMixin",
     "LockSlotMixin",
-    "ItemHighlightMixin"
+    "ItemHighlightMixin",
+    "MouseFreezeMixin"
   ],
   "injectors": {
     "defaultRequire": 1

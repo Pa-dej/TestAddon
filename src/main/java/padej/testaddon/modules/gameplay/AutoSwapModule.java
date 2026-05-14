@@ -134,15 +134,18 @@ public class AutoSwapModule extends Module {
 
     private boolean isSwapping;
 
-    /** Снэпшот yaw/pitch на момент начала swap'а — чтобы держать камеру
-     *  неподвижной всё время кликов и не слать PlayerMove с поворотами. */
-    private float swapStartYaw;
-    private float swapStartPitch;
-    /** Guard-поток, который каждые ~5мс пере-замораживает движение и
-     *  возвращает yaw/pitch к снэпшоту. Без него игрок мог бы обойти заморозку
-     *  повторным нажатием клавиш или поворотом мышкой. */
+    /** Guard-поток, который каждые ~5мс пере-замораживает movement-бинды.
+     *  Без него игрок мог бы обойти заморозку, повторно нажав клавиши
+     *  движения во время свапа. */
     private Thread freezerThread;
     private volatile boolean freezerRunning = false;
+
+    /** Глобальный флаг для {@code MouseFreezeMixin}. Пока он {@code true},
+     *  Mouse-миксин отбрасывает курсор-дельты до того как они дойдут до
+     *  {@code ClientPlayerEntity.changeLookDirection} → камера НЕ поворачивается,
+     *  pitch/yaw остаются ровно теми, что были на старте свапа, без какой-либо
+     *  тряски экрана (в отличие от подхода «снэпшот + setYaw каждый тик»). */
+    public static volatile boolean MOUSE_FROZEN = false;
     private int directRotIndex;
 
     /** Нужно чтобы открыть радиал только один раз на одно нажатие menu-key (rising edge). */
@@ -471,46 +474,30 @@ public class AutoSwapModule extends Module {
     }
 
     /**
-     * Снэпшотит yaw/pitch и стартует guard-поток, который каждые ~5 мс
-     * пере-замораживает movement-бинды и возвращает камеру в снэпшот.
-     * Это нужно потому что:
+     * Стартует guard-поток + поднимает {@link #MOUSE_FROZEN} флаг.
      * <ul>
      *   <li>В skip-режиме нет открытого Screen → ванилла продолжает читать
      *   GLFW-нажатия в KeyBinding. Однократный {@code freezeMovement()} не
      *   удержит — если игрок отпустит и снова нажмёт W, ванилла перепрожмёт
-     *   forwardKey, и анти-чит увидит walk-пакет посреди клик-серии.</li>
-     *   <li>Mouse-движение в отсутствие открытого Screen крутит камеру и
-     *   шлёт PlayerMove-пакеты с дельтой по yaw/pitch — это тоже триггер
-     *   для анти-чита.</li>
+     *   forwardKey, и анти-чит увидит walk-пакет посреди клик-серии. Поэтому
+     *   guard каждые ~5 мс ре-замораживает биндинги.</li>
+     *   <li>Mouse-движение крутит камеру и шлёт rotation-пакеты. Раньше мы
+     *   решали это снэппингом yaw/pitch каждый тик — но это вызывало визуальную
+     *   тряску при попытке шевелить мышкой. Теперь
+     *   {@code MouseFreezeMixin} перехватывает курсор-дельты ДО вызова
+     *   {@code ClientPlayerEntity.changeLookDirection} и отбрасывает их —
+     *   камера просто не двигается, экран спокойный.</li>
      * </ul>
-     * Guard приводит client.player.yaw/pitch к снэпшоту КАЖДЫЙ цикл, и
-     * KeyBinding'и к pressed=false → ни movement, ни rotation не сваливаются
-     * в outbound-пакеты во время swap'а.
      */
     private void startFreezerThread() {
-        var player = mc.player;
-        if (player == null) return;
-        swapStartYaw   = player.getYaw();
-        swapStartPitch = player.getPitch();
+        if (mc.player == null) return;
+        MOUSE_FROZEN = true;
         freezerRunning = true;
         freezerThread = new Thread(() -> {
             while (freezerRunning) {
                 mc.execute(() -> {
                     if (!freezerRunning) return;
                     freezeMovement();
-                    var p = mc.player;
-                    if (p != null) {
-                        // Возвращаем поворот в снэпшот. prev* сбрасываем тоже,
-                        // чтобы интерполяция рендера не показывала рывки камеры.
-                        // sendMovementPackets ванила сравнивает getYaw() с
-                        // приватным lastYaw, который равен снэпшоту с последнего
-                        // успешного send'а — раз мы держим getYaw == lastYaw,
-                        // rotation-пакеты не уходят на сервер.
-                        p.setYaw(swapStartYaw);
-                        p.setPitch(swapStartPitch);
-                        p.prevYaw = swapStartYaw;
-                        p.prevPitch = swapStartPitch;
-                    }
                 });
                 try { Thread.sleep(5); }
                 catch (InterruptedException ignored) { break; }
@@ -522,6 +509,7 @@ public class AutoSwapModule extends Module {
 
     private void stopFreezerThread() {
         freezerRunning = false;
+        MOUSE_FROZEN = false;
         if (freezerThread != null) {
             freezerThread.interrupt();
             freezerThread = null;
