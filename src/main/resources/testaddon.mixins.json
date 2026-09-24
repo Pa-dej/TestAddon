@@ -6,6 +6,11 @@
   "mixins": [
   ],
   "client": [
+    "GameRendererMixin",
+    "FreelookCameraMixin",
+    "LockSlotMixin",
+    "ItemHighlightMixin",
+    "MouseFreezeMixin"
   ],
   "injectors": {
     "defaultRequire": 1

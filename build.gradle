@@ -19,6 +19,10 @@ repositories {
     // for more information about repositories.
 }
 
+loom {
+    accessWidenerPath = file("src/main/resources/testaddon.accesswidener")
+}
+
 dependencies {
     // To change the versions see the gradle.properties file
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
@@ -27,7 +31,7 @@ dependencies {
 
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
 
-    modCompileOnly files("libs/SoupVisuals-3.1.2-addon-test.jar")
+    modCompileOnly files("libs/SoupVisuals-3.2.0-test-18.jar")
 }
 
 processResources {
